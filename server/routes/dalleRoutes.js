@@ -1,46 +1,97 @@
-import express from 'express';
-import * as dotenv from 'dotenv';
-import { OpenAI } from 'openai';
+import express from "express";
+import fetch from "node-fetch";
+import * as dotenv from "dotenv";
 
 dotenv.config();
 
 const router = express.Router();
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
+if (!process.env.HF_API_KEY) {
+  throw new Error("HF_API_KEY is missing in .env file");
+}
+
+// Route GET pour test
+router.get("/", (req, res) => {
+  res.status(200).json({ message: "Hello from Hugging Face - Stable Diffusion!" });
 });
 
-// Route pour vérifier que le service fonctionne
-router.route('/').get((req, res) => {
-  res.send('Hello from DALL-E!');
-});
+// Route POST pour générer une image
+router.post("/", async (req, res) => {
+  const { prompt } = req.body;
+  console.log("POST /dalle received:", req.body);
 
-// Route pour générer des images
-router.route('/').post(async (req, res) => {
+  if (!prompt || prompt.trim() === "") {
+    return res.status(400).json({ message: "Prompt is required" });
+  }
+
   try {
-    const { prompt } = req.body;
+    // URL corrigée pour Stable Diffusion XL
+    const response = await fetch(
+      "https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-xl-base-1.0",
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${process.env.HF_API_KEY}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ 
+          inputs: prompt,
+          options: {
+            wait_for_model: true // Attendre que le modèle soit chargé
+          }
+        }),
+      }
+    );
 
-    // Log du prompt reçu
-    console.log("Received prompt:", prompt);
+    const contentType = response.headers.get("content-type");
 
-    const aiResponse = await openai.images.generate({
-      prompt,
-      n: 1,
-      size: '1024x1024',
-    });
-
-    // Vérifiez si la réponse contient des données
-    if (!aiResponse.data || aiResponse.data.length === 0 || !aiResponse.data[0].b64_json) {
-      return res.status(500).json({ message: 'No image data received from OpenAI' });
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error("Hugging Face API error:", response.status, errorText);
+      
+      // Gérer les erreurs spécifiques
+      if (response.status === 503) {
+        return res.status(503).json({ 
+          message: "Model is loading, please try again in a few seconds" 
+        });
+      }
+      
+      return res.status(response.status).json({ 
+        message: errorText || "Error from Hugging Face API" 
+      });
     }
 
-    const image = aiResponse.data[0].b64_json; // Utiliser la clé b64_json
-    res.status(200).json({ photo: image });
+    // Si la réponse est JSON (modèle en cours de chargement)
+    if (contentType && contentType.includes("application/json")) {
+      const jsonData = await response.json();
+      console.log("Hugging Face JSON response:", jsonData);
+      
+      if (jsonData.error) {
+        return res.status(503).json({ 
+          message: jsonData.error || "Model is loading, please retry" 
+        });
+      }
+      
+      return res.status(200).json({ 
+        photo: null, 
+        message: "Model loading or processing, please retry in a moment." 
+      });
+    }
+
+    // Convertir l'image en base64
+    const buffer = await response.arrayBuffer();
+    const base64Image = Buffer.from(buffer).toString("base64");
+
+    res.status(200).json({ 
+      success: true,
+      photo: `data:image/png;base64,${base64Image}` 
+    });
+    
   } catch (error) {
     console.error("Error generating image:", error);
     res.status(500).json({
       success: false,
-      message: error?.message || 'An error occurred while generating the image',
+      message: error?.message || "Error while generating image",
     });
   }
 });
