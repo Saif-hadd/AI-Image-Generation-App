@@ -1,6 +1,4 @@
-Bien sûr ! Voici une **version prête à copier-coller** de ton README sans l’architecture détaillée :
 
----
 
 # Al Vision Studio – Next-Gen Image Generation Platform
 
